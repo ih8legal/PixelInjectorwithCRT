@@ -302,6 +302,7 @@ private class CaptureBindings(
     val hardwareBuffer: Method,
     val setBlastLayer: Method,
     val setBuffer: Method,
+    val setMatrix: Method,
 ) {
     fun grab(
         manager: Any,
@@ -654,6 +655,7 @@ private class CrtSurface(
     params: CrtParams,
     private val shotLayer: SurfaceControl?,
     private val shotBuffer: HardwareBuffer?,
+    private val setMatrix: Method?,
 ) {
     private val stockDuration = animator.duration
     private val stockInterpolator = animator.interpolator
@@ -694,8 +696,8 @@ private class CrtSurface(
             transaction.setAlpha(surface, 0f)
             return
         }
+        setMatrix?.invoke(transaction, surface, shotWidth / width, 0f, 0f, shotHeight / height)
         transaction
-            .setMatrix(surface, shotWidth / width, 0f, 0f, shotHeight / height)
             .setPosition(surface, rect.left, rect.top)
             .setAlpha(surface, 1f)
     }
@@ -841,6 +843,15 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
                         "setBuffer",
                         SurfaceControl::class.java,
                         HardwareBuffer::class.java,
+                    ),
+                setMatrix =
+                    SurfaceControl.Transaction::class.java.requiredMethod(
+                        "setMatrix",
+                        SurfaceControl::class.java,
+                        Float::class.javaPrimitiveType,
+                        Float::class.javaPrimitiveType,
+                        Float::class.javaPrimitiveType,
+                        Float::class.javaPrimitiveType,
                     ),
             )
         }.onFailure { Logger.info("CRT screenshot capture unavailable: ${it.reason()}") }
@@ -1175,6 +1186,7 @@ private class CrtColorFade(
                     params,
                     shotLayer,
                     shotBuffer.takeIf { shotLayer != null },
+                    capture?.setMatrix,
                 )
             offAnimator.duration = params.totalMs
             offAnimator.interpolator = LinearInterpolator()
