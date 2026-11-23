@@ -74,6 +74,7 @@ object Root {
             Shell
                 .cmd(
                     "cat /data/adb/*/log/modules_*.log 2>/dev/null",
+                    "cat ${ModuleConstants.CRT_TRACE_FILE} 2>/dev/null",
                     "logcat -d -s $TAG_MARK:V 2>/dev/null",
                     "echo $PS_MARK",
                     "ps -A -o PID,UID,NAME 2>/dev/null",

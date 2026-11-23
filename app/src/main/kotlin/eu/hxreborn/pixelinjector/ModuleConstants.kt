@@ -8,6 +8,7 @@ object ModuleConstants {
     const val KDE_CONNECT_PACKAGE: String = "org.kde.kdeconnect_tp"
     const val GITHUB_PACKAGE: String = "com.github.android"
     const val SAFE_MODE_REASON: String = "safe-mode"
+    const val CRT_TRACE_FILE: String = "/data/system/pixelinjector_crt_trace.log"
 
     val GBOARD_PACKAGES: Set<String> =
         setOf(

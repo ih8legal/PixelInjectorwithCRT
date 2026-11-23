@@ -109,7 +109,11 @@ private const val AFTERGLOW_HALO_SCALE = 3f
 private const val AFTERGLOW_HALO_ALPHA = 0.30f
 
 /** Diagnostic line for the in-app CRT debug log; the log screen filters on `tweak=CrtScreenOff`. */
-private fun crtTrace(message: String) = Logger.info("crt trace tweak=$TWEAK $message")
+private fun crtTrace(message: String) {
+    val line = "crt trace tweak=$TWEAK $message"
+    Logger.info(line)
+    CrtTraceFile.append(line)
+}
 
 private val lifecycleLock = Any()
 private var pendingHookRegistration: (() -> Unit)? = null
@@ -1131,6 +1135,7 @@ private class CrtColorFade(
         offAnimator: ObjectAnimator,
     ): Boolean {
         val params = CrtSettings.snapshot()
+        crtTrace("createSurface begin mode=${params.mode} capture=${params.capture}")
         val displayManagerInternal = fade.displayManagerInternal.get(colorFade)!!
         val displayId = fade.displayId.getInt(colorFade)
         val displayInfo =
