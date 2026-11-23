@@ -18,6 +18,7 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.view.animation.LinearInterpolator
+import android.view.animation.PathInterpolator
 import eu.hxreborn.pixelinjector.Target
 import eu.hxreborn.pixelinjector.prefs.Prefs
 import eu.hxreborn.pixelinjector.util.optionalField
@@ -39,6 +40,7 @@ import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.FutureTask
 import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -80,7 +82,25 @@ private const val TYPE_NOTIFICATION_SHADE = 2040
 private const val DENSITY_DEFAULT_DPI = 160f
 private const val PIXEL_CENTER = 0.5f
 private const val MASK_LAYER_COUNT = 4
-private const val SHOT_LAYER = MASK_LAYER_COUNT
+private const val SHOT_LAYER_COUNT = 4
+private const val MIN_GHOST_ALPHA = 0.01f
+private const val PHOSPHOR_EASE_X1 = 0.70f
+private const val PHOSPHOR_EASE_X2 = 0.25f
+private const val CLASSIC_SQUASH = 0.99f
+private const val CLASSIC_FIRST_PHASE_ALPHA = 0.85f
+private const val CLASSIC_GHOST_EXPONENT = 1.3f
+private const val CLASSIC_GHOST_OFFSET_PX = 170f
+private const val CLASSIC_GHOST_ALPHA = 0.42f
+private const val STUDIO_SQUASH = 0.992f
+private const val STUDIO_SMEAR_DP = 36f
+private const val PHOSPHOR_SQUASH_END = 0.74f
+private const val PHOSPHOR_SLIT_HOLD_END = 0.79f
+private const val PHOSPHOR_SLIT = 0.006f
+private const val PHOSPHOR_DROOP = 0.06f
+private const val PHOSPHOR_STRETCH = 0.09f
+private const val PHOSPHOR_SMEAR_DP = 28f
+private const val SMEAR_CENTER_WEIGHT = 2f / 3f
+private const val SMEAR_TAP_WEIGHT = 0.25f
 
 private const val MAX_FRINGE_ALPHA = 0.22f
 private const val MAX_TRAIL_ALPHA = 0.30f
@@ -338,29 +358,33 @@ private class CaptureBindings(
         return buffer
     }
 
-    fun newLayer(
+    fun newLayers(
         container: SurfaceControl,
         transaction: SurfaceControl.Transaction,
         buffer: HardwareBuffer,
-    ): SurfaceControl? {
-        val layer =
-            SurfaceControl
-                .Builder()
-                .setName("ColorFade CRT shot")
-                .also { setBlastLayer.invoke(it) }
-                .setParent(container)
-                .build()
+    ): List<SurfaceControl>? {
+        val created = ArrayList<SurfaceControl>()
         return try {
-            setBuffer.invoke(transaction, layer, buffer)
-            transaction
-                .setLayer(layer, SHOT_LAYER)
-                .setAlpha(layer, 0f)
-                .setVisibility(layer, true)
-            crtTrace("shot layer created")
-            layer
+            repeat(SHOT_LAYER_COUNT) { index ->
+                val layer =
+                    SurfaceControl
+                        .Builder()
+                        .setName("ColorFade CRT shot $index")
+                        .also { setBlastLayer.invoke(it) }
+                        .setParent(container)
+                        .build()
+                created += layer
+                setBuffer.invoke(transaction, layer, buffer)
+                transaction
+                    .setLayer(layer, MASK_LAYER_COUNT + index)
+                    .setAlpha(layer, 0f)
+                    .setVisibility(layer, true)
+            }
+            crtTrace("shot layers created count=${created.size}")
+            created
         } catch (error: Exception) {
-            layer.release()
-            crtTrace("shot layer failed reason=${error.reason()}")
+            created.forEach(SurfaceControl::release)
+            crtTrace("shot layers failed reason=${error.reason()}")
             null
         }
     }
@@ -453,6 +477,19 @@ private class CrtCollapseFrame(
 
     /** Where the captured screen is squeezed to; unused without a capture. */
     val shot = CrtLayer(1f, 1f, 1f)
+
+    /** Extra copies of the capture: ghosts or smear taps, all clipped to [clip]. */
+    val tapBelow = CrtLayer(1f, 1f, 1f)
+    val tapAboveA = CrtLayer(1f, 1f, 1f)
+    val tapAboveB = CrtLayer(1f, 1f, 1f)
+    val clip = CrtLayer(1f, 1f, 1f)
+    private val horizontalEase = PathInterpolator(PHOSPHOR_EASE_X1, 0f, PHOSPHOR_EASE_X2, 1f)
+    private var shapeX = 1f
+    private var shapeY = 1f
+    private var contentAlpha = 1f
+    private var ghostOffset = 0f
+    private var ghostAlpha = 0f
+    private var smear = 0f
     val layers =
         listOf(maskTop, maskBottom, maskLeft, maskRight, wash, trail, redFringe, blueFringe, core)
 
@@ -465,7 +502,7 @@ private class CrtCollapseFrame(
         density: Float,
     ) {
         layers.forEach { it.set(0f, 0f, 0f, 0f, 0f) }
-        shot.set(0f, 0f, 0f, 0f, 0f)
+        listOf(shot, tapBelow, tapAboveA, tapAboveB, clip).forEach { it.set(0f, 0f, 0f, 0f, 0f) }
         val amount = level.coerceIn(0f, 1f)
         if (amount >= 1f) return
         val progress = 1f - amount
@@ -481,10 +518,16 @@ private class CrtCollapseFrame(
         val centerX = w / 2f
         val centerY = h / 2f
         val beamHalfHeight = maxOf(1f, density)
-        val halfApertureHeight =
+        val fade = terminalFade(collapse)
+        var halfApertureHeight =
             maxOf(beamHalfHeight, centerY * (1f - params.curve.ease(vertical)))
         val beamLength = params.zipRemaining(beam)
-        val halfApertureWidth = (centerX + w * params.overscan) * beamLength
+        var halfApertureWidth = (centerX + w * params.overscan) * beamLength
+        if (hasShot && params.mode != CrtMode.DEFAULT) {
+            shape(collapse, density, fade)
+            halfApertureHeight = maxOf(beamHalfHeight, centerY * shapeY)
+            halfApertureWidth = centerX * shapeX
+        }
         val apertureLeft = centerX - halfApertureWidth
         val apertureTop = centerY - halfApertureHeight
         val apertureRight = centerX + halfApertureWidth
@@ -492,14 +535,13 @@ private class CrtCollapseFrame(
         if (hasShot) {
             // The captured screen is squeezed into the aperture over a full black backdrop.
             put(maskTop, 0f, 0f, w, h, 1f)
-            put(shot, apertureLeft, apertureTop, apertureRight, apertureBottom, 1f)
+            putShots(apertureLeft, apertureTop, apertureRight, apertureBottom)
         } else {
             put(maskTop, 0f, 0f, w, apertureTop, 1f)
             put(maskBottom, 0f, apertureBottom, w, h, 1f)
             if (apertureLeft > 0f) put(maskLeft, 0f, apertureTop, apertureLeft, apertureBottom, 1f)
             if (apertureRight < w) put(maskRight, apertureRight, apertureTop, w, apertureBottom, 1f)
         }
-        val fade = terminalFade(collapse)
         val washAlpha = (washLevel(collapse, vertical) * params.flash * fade).coerceIn(0f, 1f)
         if (washAlpha > 0f) {
             put(
@@ -532,6 +574,137 @@ private class CrtCollapseFrame(
             val tail = 1f - params.collapseFraction
             val spent = ((progress - params.collapseFraction) / tail).coerceIn(0f, 1f)
             setAfterglow(centerX, centerY, density, 1f - spent)
+        }
+    }
+
+    /** Content shape per look, ported from the standalone app's three renderers. */
+    private fun shape(
+        collapse: Float,
+        density: Float,
+        fade: Float,
+    ) {
+        shapeX = 1f
+        shapeY = 1f
+        contentAlpha = 1f
+        ghostOffset = 0f
+        ghostAlpha = 0f
+        smear = 0f
+        when (params.mode) {
+            CrtMode.CLASSIC -> classicShape(collapse, fade)
+            CrtMode.STUDIO -> studioShape(collapse, density)
+            CrtMode.PHOSPHOR -> phosphorShape(collapse, density)
+            CrtMode.DEFAULT -> Unit
+        }
+    }
+
+    private fun classicShape(
+        collapse: Float,
+        fade: Float,
+    ) {
+        val split = params.phaseEnd
+        val stretch = 1f + params.overscan * 2f
+        if (collapse <= split) {
+            val u = collapse / split
+            val eased = params.curve.ease(u)
+            shapeY = 1f - eased * CLASSIC_SQUASH
+            shapeX = 1f + eased * (stretch - 1f)
+            contentAlpha = CLASSIC_FIRST_PHASE_ALPHA * fade
+            val ghost = u.pow(CLASSIC_GHOST_EXPONENT)
+            ghostOffset = ghost * CLASSIC_GHOST_OFFSET_PX
+            ghostAlpha = ghost * CLASSIC_GHOST_ALPHA * fade
+        } else {
+            val v = (collapse - split) / (1f - split)
+            val remaining = 1f - v * v
+            shapeY = (1f - CLASSIC_SQUASH) * remaining
+            shapeX = stretch * remaining
+            contentAlpha = fade
+        }
+    }
+
+    private fun studioShape(
+        collapse: Float,
+        density: Float,
+    ) {
+        val split = params.phaseEnd
+        if (collapse <= split) {
+            val eased = params.curve.ease(collapse / split)
+            shapeY = 1f - eased * STUDIO_SQUASH
+            smear = STUDIO_SMEAR_DP * density * eased * shapeY
+        } else {
+            shapeY = 0f
+            shapeX = params.zipRemaining((collapse - split) / (1f - split))
+            contentAlpha = 0f
+        }
+    }
+
+    private fun phosphorShape(
+        collapse: Float,
+        density: Float,
+    ) {
+        val flash = params.flash
+        val aberration: Float
+        if (collapse <= PHOSPHOR_SQUASH_END) {
+            val u = collapse / PHOSPHOR_SQUASH_END
+            val snap = snapPoint()
+            if (u <= snap) {
+                val hang = u / snap
+                shapeY = 1f - PHOSPHOR_DROOP * hang.pow(1.5f)
+                shapeX = 1f + PHOSPHOR_STRETCH * (1f - (1f - hang).pow(2.2f))
+            } else {
+                val release = ((u - snap) / (1f - snap)).pow(3.6f)
+                shapeY = (1f - PHOSPHOR_DROOP) * (1f - release) + PHOSPHOR_SLIT * release
+                shapeX = (1f + PHOSPHOR_STRETCH) * (1f - release) + release
+            }
+            aberration = (0.35f * u + 0.65f * params.curve.ease(u)) * flash
+        } else if (collapse <= PHOSPHOR_SLIT_HOLD_END) {
+            shapeY = PHOSPHOR_SLIT
+            aberration = flash * 0.9f
+        } else {
+            val tail = 1f - PHOSPHOR_SLIT_HOLD_END
+            val snap = ((collapse - PHOSPHOR_SLIT_HOLD_END) / tail).coerceIn(0f, 1f)
+            val eased = horizontalEase.getInterpolation(snap)
+            shapeY = PHOSPHOR_SLIT * (1f - eased)
+            shapeX = (1f - eased).coerceAtLeast(0f)
+            contentAlpha = 1f - snap
+            aberration = (1f - snap) * flash * 0.6f
+        }
+        smear = PHOSPHOR_SMEAR_DP * density * aberration * flash * shapeY
+    }
+
+    /** How far through the squash the image lets go, heavier coils holding on longer. */
+    private fun snapPoint(): Float =
+        when (params.curve) {
+            CrtCurve.STANDARD -> 0.72f
+            CrtCurve.CREEP -> 0.78f
+            CrtCurve.HEAVY -> 0.82f
+            CrtCurve.EXTREME -> 0.88f
+        }
+
+    /** The capture, plus ghost or smear copies, squeezed into the aperture. */
+    private fun putShots(
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+    ) {
+        if (contentAlpha <= 0f) return
+        put(clip, left, top, right, bottom, 1f)
+        val smearing = smear > 1f
+        val centerAlpha = if (smearing) contentAlpha * SMEAR_CENTER_WEIGHT else contentAlpha
+        put(shot, left, top, right, bottom, centerAlpha)
+        if (smearing) {
+            put(tapBelow, left, top - smear, right, bottom - smear, contentAlpha)
+            put(
+                tapAboveA,
+                left,
+                top + smear,
+                right,
+                bottom + smear,
+                contentAlpha * SMEAR_TAP_WEIGHT,
+            )
+        } else if (ghostOffset > 1f && ghostAlpha > MIN_GHOST_ALPHA) {
+            put(tapAboveA, left, top - ghostOffset, right, bottom - ghostOffset, ghostAlpha)
+            put(tapAboveB, left, top + ghostOffset, right, bottom + ghostOffset, ghostAlpha)
         }
     }
 
@@ -673,14 +846,15 @@ private class CrtSurface(
     private val density: Float,
     val animator: ObjectAnimator,
     params: CrtParams,
-    private val shotLayer: SurfaceControl?,
+    private val shotLayers: List<SurfaceControl>?,
     private val shotBuffer: HardwareBuffer?,
     private val setMatrix: Method?,
 ) {
     private val stockDuration = animator.duration
     private val stockInterpolator = animator.interpolator
-    private val frame = CrtCollapseFrame(params, shotLayer != null)
+    private val frame = CrtCollapseFrame(params, shotLayers != null)
     private val crop = Rect()
+    private val shotCrop = Rect()
 
     var drawFailed = false
 
@@ -701,25 +875,52 @@ private class CrtSurface(
             transaction.setAlpha(surface, if (hasPixels) layer.alpha else 0f)
             if (hasPixels) transaction.setCrop(surface, crop)
         }
-        shotLayer?.let { drawShot(it, transaction) }
+        shotLayers?.let { drawShots(it, transaction) }
         showContainer(transaction)
     }
 
-    private fun drawShot(
-        surface: SurfaceControl,
+    private fun drawShots(
+        surfaces: List<SurfaceControl>,
         transaction: SurfaceControl.Transaction,
     ) {
-        val rect = frame.shot
-        val shotWidth = rect.right - rect.left
-        val shotHeight = rect.bottom - rect.top
-        if (shotWidth <= 0f || shotHeight <= 0f) {
+        drawCopy(surfaces[0], frame.tapBelow, true, transaction)
+        drawCopy(surfaces[1], frame.shot, false, transaction)
+        drawCopy(surfaces[2], frame.tapAboveA, true, transaction)
+        drawCopy(surfaces[3], frame.tapAboveB, true, transaction)
+    }
+
+    private fun drawCopy(
+        surface: SurfaceControl,
+        rect: CrtLayer,
+        clipped: Boolean,
+        transaction: SurfaceControl.Transaction,
+    ) {
+        val copyWidth = rect.right - rect.left
+        val copyHeight = rect.bottom - rect.top
+        if (rect.alpha <= 0f || copyWidth <= 0f || copyHeight <= 0f) {
             transaction.setAlpha(surface, 0f)
             return
         }
-        setMatrix?.invoke(transaction, surface, shotWidth / width, 0f, 0f, shotHeight / height)
+        val scaleX = copyWidth / width
+        val scaleY = copyHeight / height
+        if (clipped) {
+            val area = frame.clip
+            shotCrop.set(
+                floor((area.left - rect.left) / scaleX).toInt().coerceAtLeast(0),
+                floor((area.top - rect.top) / scaleY).toInt().coerceAtLeast(0),
+                ceil((area.right - rect.left) / scaleX).toInt().coerceAtMost(width.toInt()),
+                ceil((area.bottom - rect.top) / scaleY).toInt().coerceAtMost(height.toInt()),
+            )
+            if (shotCrop.isEmpty) {
+                transaction.setAlpha(surface, 0f)
+                return
+            }
+            transaction.setCrop(surface, shotCrop)
+        }
+        setMatrix?.invoke(transaction, surface, scaleX, 0f, 0f, scaleY)
         transaction
             .setPosition(surface, rect.left, rect.top)
-            .setAlpha(surface, 1f)
+            .setAlpha(surface, rect.alpha)
     }
 
     fun showBlack(setColor: Method) {
@@ -728,7 +929,7 @@ private class CrtSurface(
         SurfaceControl.Transaction().use { transaction ->
             setColor.invoke(transaction, layer, frame.maskTop.rgb)
             transaction
-                .setLayer(layer, layers.size)
+                .setLayer(layer, layers.size + SHOT_LAYER_COUNT + MASK_LAYER_COUNT)
                 .setCrop(layer, crop)
                 .setAlpha(layer, 1f)
                 .setVisibility(layer, true)
@@ -743,7 +944,7 @@ private class CrtSurface(
 
     fun release() {
         layers.forEach(SurfaceControl::release)
-        shotLayer?.release()
+        shotLayers?.forEach(SurfaceControl::release)
         shotBuffer?.close()
     }
 
@@ -755,6 +956,10 @@ private class CrtSurface(
             .apply()
     }
 }
+
+/** Colour layers sit above the mask layers and the four capture copies between them. */
+private fun stackOrder(index: Int): Int =
+    if (index >= MASK_LAYER_COUNT) index + SHOT_LAYER_COUNT else index
 
 private fun pixelEdge(edge: Float): Int = ceil(edge - PIXEL_CENTER).toInt()
 
@@ -1157,7 +1362,7 @@ private class CrtColorFade(
         if (params.capture && capture == null) {
             crtTrace("capture unavailable reason=bindings missing")
         }
-        var shotLayer: SurfaceControl? = null
+        var shotLayers: List<SurfaceControl>? = null
         val created = ArrayList<SurfaceControl>()
         var surfaceLayout: Any? = null
         var surfacePrepared = false
@@ -1181,12 +1386,12 @@ private class CrtColorFade(
                             .also(created::add)
                     surfaces.setColor.invoke(transaction, surface, layer.rgb)
                     transaction
-                        .setLayer(surface, if (index >= MASK_LAYER_COUNT) index + 1 else index)
+                        .setLayer(surface, stackOrder(index))
                         .setAlpha(surface, 0f)
                         .setVisibility(surface, true)
                 }
                 if (shotBuffer != null && capture != null) {
-                    shotLayer = capture.newLayer(container, transaction, shotBuffer)
+                    shotLayers = capture.newLayers(container, transaction, shotBuffer)
                 }
                 surfaces.setLayerStack.invoke(transaction, container, layerStack)
                 surfaces.setWindowCrop.invoke(transaction, container, width, height)
@@ -1212,15 +1417,15 @@ private class CrtColorFade(
                     density,
                     offAnimator,
                     params,
-                    shotLayer,
-                    shotBuffer.takeIf { shotLayer != null },
+                    shotLayers,
+                    shotBuffer.takeIf { shotLayers != null },
                     capture?.setMatrix,
                 )
             offAnimator.duration = params.totalMs
             offAnimator.interpolator = LinearInterpolator()
-            if (shotLayer == null) shotBuffer?.close()
+            if (shotLayers == null) shotBuffer?.close()
             crtTrace(
-                "collapse path=${if (shotLayer != null) "screenshot" else "masks"} " +
+                "collapse path=${if (shotLayers != null) "screenshot" else "masks"} " +
                     "mode=${params.mode} capture=${params.capture} display=${width}x$height " +
                     "sdk=${Build.VERSION.SDK_INT} build=${Build.ID}",
             )
@@ -1238,7 +1443,7 @@ private class CrtColorFade(
                     }
                 }
                 created.forEach(SurfaceControl::release)
-                shotLayer?.release()
+                shotLayers?.forEach(SurfaceControl::release)
                 shotBuffer?.close()
             }
         }
