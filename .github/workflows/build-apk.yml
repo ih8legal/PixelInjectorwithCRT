@@ -24,7 +24,22 @@ jobs:
           java-version: 21
           cache: gradle
 
+      - name: Restore signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.p12"
+            echo "DEBUG_STORE_FILE=$RUNNER_TEMP/debug.p12" >> "$GITHUB_ENV"
+          else
+            echo "No DEBUG_KEYSTORE_B64 secret; using a throwaway debug key."
+          fi
+
       - name: Build debug APK
+        env:
+          DEBUG_STORE_PASSWORD: ${{ secrets.DEBUG_STORE_PASSWORD }}
+          DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
         run: ./gradlew :app:assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4
