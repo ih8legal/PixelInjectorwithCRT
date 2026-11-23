@@ -108,6 +108,9 @@ private const val AFTERGLOW_DOT_GROWTH_DP = 2.5f
 private const val AFTERGLOW_HALO_SCALE = 3f
 private const val AFTERGLOW_HALO_ALPHA = 0.30f
 
+/** Diagnostic line for the in-app CRT debug log; the log screen filters on `tweak=CrtScreenOff`. */
+private fun crtTrace(message: String) = Logger.info("crt trace tweak=$TWEAK $message")
+
 private val lifecycleLock = Any()
 private var pendingHookRegistration: (() -> Unit)? = null
 private var registeringHooks = false
@@ -310,12 +313,25 @@ private class CaptureBindings(
         width: Int,
         height: Int,
     ): HardwareBuffer? {
-        val result = screenshot.invoke(manager, displayId) ?: return null
-        val buffer = hardwareBuffer.invoke(result) as? HardwareBuffer ?: return null
+        val result = screenshot.invoke(manager, displayId)
+        if (result == null) {
+            crtTrace("capture failed reason=systemScreenshot returned null")
+            return null
+        }
+        val buffer = hardwareBuffer.invoke(result) as? HardwareBuffer
+        if (buffer == null) {
+            crtTrace("capture failed reason=no hardware buffer")
+            return null
+        }
         if (buffer.width != width || buffer.height != height) {
+            crtTrace(
+                "capture rejected reason=size mismatch buffer=${buffer.width}x${buffer.height} " +
+                    "display=${width}x$height",
+            )
             buffer.close()
             return null
         }
+        crtTrace("capture ok buffer=${buffer.width}x${buffer.height} format=${buffer.format}")
         return buffer
     }
 
@@ -337,10 +353,11 @@ private class CaptureBindings(
                 .setLayer(layer, SHOT_LAYER)
                 .setAlpha(layer, 0f)
                 .setVisibility(layer, true)
+            crtTrace("shot layer created")
             layer
-        } catch (error: ReflectiveOperationException) {
+        } catch (error: Exception) {
             layer.release()
-            Logger.info("CRT screenshot layer unavailable: ${error.reason()}")
+            crtTrace("shot layer failed reason=${error.reason()}")
             null
         }
     }
@@ -854,7 +871,8 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
                         Float::class.javaPrimitiveType,
                     ),
             )
-        }.onFailure { Logger.info("CRT screenshot capture unavailable: ${it.reason()}") }
+        }.onFailure { crtTrace("capture bindings missing reason=${it.reason()}") }
+            .onSuccess { crtTrace("capture bindings resolved sdk=${Build.VERSION.SDK_INT}") }
             .getOrNull()
     val animatorBindings =
         resolving {
@@ -1129,6 +1147,10 @@ private class CrtColorFade(
             } else {
                 null
             }
+        if (!params.capture) crtTrace("capture off in settings")
+        if (params.capture && capture == null) {
+            crtTrace("capture unavailable reason=bindings missing")
+        }
         var shotLayer: SurfaceControl? = null
         val created = ArrayList<SurfaceControl>()
         var surfaceLayout: Any? = null
@@ -1191,6 +1213,11 @@ private class CrtColorFade(
             offAnimator.duration = params.totalMs
             offAnimator.interpolator = LinearInterpolator()
             if (shotLayer == null) shotBuffer?.close()
+            crtTrace(
+                "collapse path=${if (shotLayer != null) "screenshot" else "masks"} " +
+                    "mode=${params.mode} capture=${params.capture} display=${width}x$height " +
+                    "sdk=${Build.VERSION.SDK_INT} build=${Build.ID}",
+            )
             surfacePrepared = true
             return true
         } finally {

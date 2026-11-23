@@ -62,6 +62,9 @@ sealed interface Destination : NavKey {
     data object ModuleLog : Destination
 
     @Serializable
+    data object CrtLog : Destination
+
+    @Serializable
     data object Settings : Destination
 
     @Serializable

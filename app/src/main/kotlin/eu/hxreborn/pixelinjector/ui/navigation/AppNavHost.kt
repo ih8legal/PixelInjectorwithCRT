@@ -343,6 +343,7 @@ fun AppNavHost(
                         onFringeChange = { viewModel.save(Prefs.CRT_FRINGE, it) },
                         onCyanChange = { viewModel.save(Prefs.CRT_CYAN, it) },
                         onCaptureChange = { viewModel.save(Prefs.CRT_CAPTURE, it) },
+                        onViewLog = { push(Destination.CrtLog) },
                     )
                 }
                 entry<Destination.DownloadChipEditor>(metadata = BottomSheetSceneStrategy.bottomSheet()) {
@@ -653,6 +654,14 @@ fun AppNavHost(
                 }
                 entry<Destination.DateFormat>(metadata = BottomSheetSceneStrategy.bottomSheet()) {
                     DateFormatSheet(selected = dateStyle, onSelect = viewModel::setDateStyle)
+                }
+                entry<Destination.CrtLog> {
+                    ModuleLogScreen(
+                        state = moduleLog,
+                        onRefresh = viewModel::refreshModuleLog,
+                        onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
+                        initialQuery = "tweak=CrtScreenOff",
+                    )
                 }
                 entry<Destination.ModuleLog> {
                     ModuleLogScreen(

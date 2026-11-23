@@ -118,9 +118,10 @@ fun ModuleLogScreen(
     state: ModuleLogState,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
+    initialQuery: String = "",
 ) {
     var filter by rememberSaveable { mutableStateOf<String?>(null) }
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf(initialQuery) }
     var minLevel by rememberSaveable { mutableStateOf(ALL_LEVELS) }
     var wrap by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(Unit) { onRefresh() }

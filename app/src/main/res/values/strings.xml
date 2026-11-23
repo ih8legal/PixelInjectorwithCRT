@@ -94,6 +94,7 @@
     <string name="crt_fringe">Color fringe</string>
     <string name="crt_cyan">Cyan beam glow</string>
     <string name="crt_capture">Shrink screen content (screenshot)</string>
+    <string name="crt_view_log">View CRT debug log</string>
     <string name="tweak_clipboard">Clipboard in background</string>
     <string name="tweak_clipboard_desc">Allows selected apps to read the clipboard in the background</string>
     <string name="tweak_clipboard_apps">Allowed apps</string>

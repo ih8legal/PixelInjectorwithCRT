@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -49,6 +50,7 @@ fun CrtScreenOffSheet(
     onFringeChange: (Boolean) -> Unit,
     onCyanChange: (Boolean) -> Unit,
     onCaptureChange: (Boolean) -> Unit,
+    onViewLog: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxHeight(SHEET_HEIGHT).padding(SheetPadding).verticalScroll(rememberScrollState()),
@@ -115,6 +117,7 @@ fun CrtScreenOffSheet(
         ChipSwitchTile(stringResource(R.string.crt_fringe), fringe, onFringeChange)
         ChipSwitchTile(stringResource(R.string.crt_cyan), cyan, onCyanChange)
         ChipSwitchTile(stringResource(R.string.crt_capture), capture, onCaptureChange)
+        TextButton(onClick = onViewLog) { Text(stringResource(R.string.crt_view_log)) }
     }
 }
 
