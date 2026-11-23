@@ -39,6 +39,7 @@ fun CrtScreenOffSheet(
     afterglow: Int,
     fringe: Boolean,
     cyan: Boolean,
+    capture: Boolean,
     onModeChange: (String) -> Unit,
     onStyleChange: (String) -> Unit,
     onCurveChange: (String) -> Unit,
@@ -47,6 +48,7 @@ fun CrtScreenOffSheet(
     onAfterglowChange: (Int) -> Unit,
     onFringeChange: (Boolean) -> Unit,
     onCyanChange: (Boolean) -> Unit,
+    onCaptureChange: (Boolean) -> Unit,
 ) {
     Column(
         Modifier.fillMaxHeight(SHEET_HEIGHT).padding(SheetPadding).verticalScroll(rememberScrollState()),
@@ -112,6 +114,7 @@ fun CrtScreenOffSheet(
         }
         ChipSwitchTile(stringResource(R.string.crt_fringe), fringe, onFringeChange)
         ChipSwitchTile(stringResource(R.string.crt_cyan), cyan, onCyanChange)
+        ChipSwitchTile(stringResource(R.string.crt_capture), capture, onCaptureChange)
     }
 }
 

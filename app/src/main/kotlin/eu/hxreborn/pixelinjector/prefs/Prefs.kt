@@ -138,6 +138,7 @@ object Prefs {
     val CRT_AFTERGLOW = IntPref("system.crtScreenOff.afterglow", CRT_AFTERGLOW_DEFAULT).register()
     val CRT_FRINGE = BoolPref("system.crtScreenOff.fringe", true).register()
     val CRT_CYAN = BoolPref("system.crtScreenOff.cyan", false).register()
+    val CRT_CAPTURE = BoolPref("system.crtScreenOff.capture", true).register()
     val DOUBLE_TAP_TO_SLEEP = BoolPref("launcher.doubleTapToSleep", false).register()
     val BIOMETRIC_BYPASS = BoolPref("systemui.biometricBypass", false).register()
     val BIOMETRIC_SOUND = StringPref("systemui.biometricBypass.sound", "").register()

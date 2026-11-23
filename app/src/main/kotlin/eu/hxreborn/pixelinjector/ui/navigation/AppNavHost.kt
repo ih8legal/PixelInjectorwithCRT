@@ -333,6 +333,7 @@ fun AppNavHost(
                         afterglow = prefs[Prefs.CRT_AFTERGLOW],
                         fringe = prefs[Prefs.CRT_FRINGE],
                         cyan = prefs[Prefs.CRT_CYAN],
+                        capture = prefs[Prefs.CRT_CAPTURE],
                         onModeChange = { viewModel.save(Prefs.CRT_MODE, it) },
                         onStyleChange = { viewModel.save(Prefs.CRT_STYLE, it) },
                         onCurveChange = { viewModel.save(Prefs.CRT_CURVE, it) },
@@ -341,6 +342,7 @@ fun AppNavHost(
                         onAfterglowChange = { viewModel.save(Prefs.CRT_AFTERGLOW, it) },
                         onFringeChange = { viewModel.save(Prefs.CRT_FRINGE, it) },
                         onCyanChange = { viewModel.save(Prefs.CRT_CYAN, it) },
+                        onCaptureChange = { viewModel.save(Prefs.CRT_CAPTURE, it) },
                     )
                 }
                 entry<Destination.DownloadChipEditor>(metadata = BottomSheetSceneStrategy.bottomSheet()) {

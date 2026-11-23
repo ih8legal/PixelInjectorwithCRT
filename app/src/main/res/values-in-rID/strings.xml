@@ -93,6 +93,7 @@
     <string name="crt_afterglow_value">%1$d md</string>
     <string name="crt_fringe">Pinggiran warna</string>
     <string name="crt_cyan">Cahaya sinar sian</string>
+    <string name="crt_capture">Kecilkan isi layar (tangkapan layar)</string>
     <string name="tweak_clipboard">Papan klip di latar belakang</string>
     <string name="tweak_clipboard_desc">Mengizinkan aplikasi yang dipilih membaca papan klip di latar belakang</string>
     <string name="tweak_clipboard_apps">Aplikasi yang diizinkan</string>

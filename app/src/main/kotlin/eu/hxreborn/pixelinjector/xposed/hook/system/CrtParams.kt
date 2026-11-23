@@ -72,6 +72,7 @@ internal class CrtParams(
     val flash: Float,
     val fringe: Boolean,
     cyan: Boolean,
+    val capture: Boolean,
 ) {
     /** Only Phosphor Overdrive lingers after the collapse, as in the app. */
     val afterglowMs: Long = if (mode == CrtMode.PHOSPHOR) afterglowMs else 0L
@@ -124,9 +125,10 @@ internal object CrtSettings {
         }
     val fringe = Switch(Prefs.CRT_FRINGE)
     val cyan = Switch(Prefs.CRT_CYAN)
+    val capture = Switch(Prefs.CRT_CAPTURE)
 
     val values: List<Value<*, *>> =
-        listOf(mode, style, curve, duration, flash, afterglow, fringe, cyan)
+        listOf(mode, style, curve, duration, flash, afterglow, fringe, cyan, capture)
 
     fun snapshot(): CrtParams =
         CrtParams(
@@ -138,6 +140,7 @@ internal object CrtSettings {
             flash = flash.value,
             fringe = fringe.enabled,
             cyan = cyan.enabled,
+            capture = capture.enabled,
         )
 }
 

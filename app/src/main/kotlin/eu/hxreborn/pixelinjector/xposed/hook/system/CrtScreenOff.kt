@@ -4,6 +4,7 @@ import android.animation.ObjectAnimator
 import android.app.Application
 import android.content.Context
 import android.graphics.Rect
+import android.hardware.HardwareBuffer
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -78,6 +79,9 @@ private const val COLOR_FADE_LAYER = 0x40000001
 private const val TYPE_NOTIFICATION_SHADE = 2040
 private const val DENSITY_DEFAULT_DPI = 160f
 private const val PIXEL_CENTER = 0.5f
+private const val SCREEN_CAPTURE = "android.window.ScreenCapture\$ScreenshotHardwareBuffer"
+private const val MASK_LAYER_COUNT = 4
+private const val SHOT_LAYER = MASK_LAYER_COUNT
 
 private const val MAX_FRINGE_ALPHA = 0.22f
 private const val MAX_TRAIL_ALPHA = 0.30f
@@ -292,6 +296,55 @@ private class SurfaceBindings(
     val setWindowCrop: Method,
 )
 
+/** Optional: without these the collapse falls back to black masks over the live display. */
+private class CaptureBindings(
+    val screenshot: Method,
+    val hardwareBuffer: Method,
+    val setBlastLayer: Method,
+    val setBuffer: Method,
+) {
+    fun grab(
+        manager: Any,
+        displayId: Int,
+        width: Int,
+        height: Int,
+    ): HardwareBuffer? {
+        val result = screenshot.invoke(manager, displayId) ?: return null
+        val buffer = hardwareBuffer.invoke(result) as? HardwareBuffer ?: return null
+        if (buffer.width != width || buffer.height != height) {
+            buffer.close()
+            return null
+        }
+        return buffer
+    }
+
+    fun newLayer(
+        container: SurfaceControl,
+        transaction: SurfaceControl.Transaction,
+        buffer: HardwareBuffer,
+    ): SurfaceControl? {
+        val layer =
+            SurfaceControl
+                .Builder()
+                .setName("ColorFade CRT shot")
+                .also { setBlastLayer.invoke(it) }
+                .setParent(container)
+                .build()
+        return try {
+            setBuffer.invoke(transaction, layer, buffer)
+            transaction
+                .setLayer(layer, SHOT_LAYER)
+                .setAlpha(layer, 0f)
+                .setVisibility(layer, true)
+            layer
+        } catch (error: ReflectiveOperationException) {
+            layer.release()
+            Logger.info("CRT screenshot layer unavailable: ${error.reason()}")
+            null
+        }
+    }
+}
+
 private class OffAnimatorBindings(
     val displayManagerService: Field,
     val syncRoot: Field,
@@ -364,6 +417,7 @@ private class CrtLayer(
 
 private class CrtCollapseFrame(
     private val params: CrtParams,
+    private val hasShot: Boolean = false,
 ) {
     val maskTop = CrtLayer(0f, 0f, 0f)
     val maskBottom = CrtLayer(0f, 0f, 0f)
@@ -375,6 +429,9 @@ private class CrtCollapseFrame(
     val redFringe = CrtLayer(1f, 0f, 0f)
     val blueFringe = CrtLayer(0f, 0f, 1f)
     val core = CrtLayer(1f, 1f, 1f)
+
+    /** Where the captured screen is squeezed to; unused without a capture. */
+    val shot = CrtLayer(1f, 1f, 1f)
     val layers =
         listOf(maskTop, maskBottom, maskLeft, maskRight, wash, trail, redFringe, blueFringe, core)
 
@@ -387,6 +444,7 @@ private class CrtCollapseFrame(
         density: Float,
     ) {
         layers.forEach { it.set(0f, 0f, 0f, 0f, 0f) }
+        shot.set(0f, 0f, 0f, 0f, 0f)
         val amount = level.coerceIn(0f, 1f)
         if (amount >= 1f) return
         val progress = 1f - amount
@@ -410,10 +468,16 @@ private class CrtCollapseFrame(
         val apertureTop = centerY - halfApertureHeight
         val apertureRight = centerX + halfApertureWidth
         val apertureBottom = centerY + halfApertureHeight
-        put(maskTop, 0f, 0f, w, apertureTop, 1f)
-        put(maskBottom, 0f, apertureBottom, w, h, 1f)
-        if (apertureLeft > 0f) put(maskLeft, 0f, apertureTop, apertureLeft, apertureBottom, 1f)
-        if (apertureRight < w) put(maskRight, apertureRight, apertureTop, w, apertureBottom, 1f)
+        if (hasShot) {
+            // The captured screen is squeezed into the aperture over a full black backdrop.
+            put(maskTop, 0f, 0f, w, h, 1f)
+            put(shot, apertureLeft, apertureTop, apertureRight, apertureBottom, 1f)
+        } else {
+            put(maskTop, 0f, 0f, w, apertureTop, 1f)
+            put(maskBottom, 0f, apertureBottom, w, h, 1f)
+            if (apertureLeft > 0f) put(maskLeft, 0f, apertureTop, apertureLeft, apertureBottom, 1f)
+            if (apertureRight < w) put(maskRight, apertureRight, apertureTop, w, apertureBottom, 1f)
+        }
         val fade = terminalFade(collapse)
         val washAlpha = (washLevel(collapse, vertical) * params.flash * fade).coerceIn(0f, 1f)
         if (washAlpha > 0f) {
@@ -588,10 +652,12 @@ private class CrtSurface(
     private val density: Float,
     val animator: ObjectAnimator,
     params: CrtParams,
+    private val shotLayer: SurfaceControl?,
+    private val shotBuffer: HardwareBuffer?,
 ) {
     private val stockDuration = animator.duration
     private val stockInterpolator = animator.interpolator
-    private val frame = CrtCollapseFrame(params)
+    private val frame = CrtCollapseFrame(params, shotLayer != null)
     private val crop = Rect()
 
     var drawFailed = false
@@ -613,7 +679,25 @@ private class CrtSurface(
             transaction.setAlpha(surface, if (hasPixels) layer.alpha else 0f)
             if (hasPixels) transaction.setCrop(surface, crop)
         }
+        shotLayer?.let { drawShot(it, transaction) }
         showContainer(transaction)
+    }
+
+    private fun drawShot(
+        surface: SurfaceControl,
+        transaction: SurfaceControl.Transaction,
+    ) {
+        val rect = frame.shot
+        val shotWidth = rect.right - rect.left
+        val shotHeight = rect.bottom - rect.top
+        if (shotWidth <= 0f || shotHeight <= 0f) {
+            transaction.setAlpha(surface, 0f)
+            return
+        }
+        transaction
+            .setMatrix(surface, shotWidth / width, 0f, 0f, shotHeight / height)
+            .setPosition(surface, rect.left, rect.top)
+            .setAlpha(surface, 1f)
     }
 
     fun showBlack(setColor: Method) {
@@ -637,6 +721,8 @@ private class CrtSurface(
 
     fun release() {
         layers.forEach(SurfaceControl::release)
+        shotLayer?.release()
+        shotBuffer?.close()
     }
 
     private fun showContainer(transaction: SurfaceControl.Transaction) {
@@ -739,6 +825,26 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
                 setWindowCrop = transaction.requiredMethod("setWindowCrop", surface, int, int),
             )
         }.getOrElse { return missing("SurfaceControl colour layer members", it) }
+    val captureBindings =
+        resolving {
+            val int = Int::class.javaPrimitiveType
+            CaptureBindings(
+                screenshot =
+                    cl
+                        .loadClass(DISPLAY_MANAGER_INTERNAL)
+                        .requiredMethod("systemScreenshot", int),
+                hardwareBuffer =
+                    cl.loadClass(SCREEN_CAPTURE).requiredMethod("getHardwareBuffer"),
+                setBlastLayer = SurfaceControl.Builder::class.java.requiredMethod("setBLASTLayer"),
+                setBuffer =
+                    SurfaceControl.Transaction::class.java.requiredMethod(
+                        "setBuffer",
+                        SurfaceControl::class.java,
+                        HardwareBuffer::class.java,
+                    ),
+            )
+        }.onFailure { Logger.info("CRT screenshot capture unavailable: ${it.reason()}") }
+            .getOrNull()
     val animatorBindings =
         resolving {
             OffAnimatorBindings(
@@ -801,7 +907,13 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
                 resultIsState,
             )
         }.getOrElse { return missing("DisplayStateController#mPerformScreenOffTransition", it) }
-    val crt = CrtColorFade(fadeBindings, displayInfoBindings, surfaceBindings, animatorBindings)
+    val crt = CrtColorFade(
+            fadeBindings,
+            displayInfoBindings,
+            surfaceBindings,
+            animatorBindings,
+            captureBindings,
+        )
     Logger.info(
         "resolved tweak=$TWEAK members=${draw.signature()},${prepare.signature()}," +
             "${fadeBindings.dismiss.signature()},${updateDisplayState.signature()}",
@@ -919,6 +1031,7 @@ private class CrtColorFade(
     private val info: DisplayInfoBindings,
     private val surfaces: SurfaceBindings,
     private val animator: OffAnimatorBindings,
+    private val capture: CaptureBindings?,
 ) {
     fun ownedSurface(colorFade: Any): CrtSurface? =
         crtSurfaces[colorFade]?.takeIf {
@@ -997,6 +1110,15 @@ private class CrtColorFade(
         val width = info.naturalWidth.invoke(displayInfo) as Int
         val height = info.naturalHeight.invoke(displayInfo) as Int
         val density = info.logicalDensityDpi.getInt(displayInfo) / DENSITY_DEFAULT_DPI
+        val shotBuffer =
+            if (params.capture) {
+                guarded<HardwareBuffer?>(null) {
+                    capture?.grab(displayManagerInternal, displayId, width, height)
+                }
+            } else {
+                null
+            }
+        var shotLayer: SurfaceControl? = null
         val created = ArrayList<SurfaceControl>()
         var surfaceLayout: Any? = null
         var surfacePrepared = false
@@ -1020,9 +1142,12 @@ private class CrtColorFade(
                             .also(created::add)
                     surfaces.setColor.invoke(transaction, surface, layer.rgb)
                     transaction
-                        .setLayer(surface, index)
+                        .setLayer(surface, if (index >= MASK_LAYER_COUNT) index + 1 else index)
                         .setAlpha(surface, 0f)
                         .setVisibility(surface, true)
+                }
+                if (shotBuffer != null && capture != null) {
+                    shotLayer = capture.newLayer(container, transaction, shotBuffer)
                 }
                 surfaces.setLayerStack.invoke(transaction, container, layerStack)
                 surfaces.setWindowCrop.invoke(transaction, container, width, height)
@@ -1048,9 +1173,12 @@ private class CrtColorFade(
                     density,
                     offAnimator,
                     params,
+                    shotLayer,
+                    shotBuffer.takeIf { shotLayer != null },
                 )
             offAnimator.duration = params.totalMs
             offAnimator.interpolator = LinearInterpolator()
+            if (shotLayer == null) shotBuffer?.close()
             surfacePrepared = true
             return true
         } finally {
@@ -1065,6 +1193,8 @@ private class CrtColorFade(
                     }
                 }
                 created.forEach(SurfaceControl::release)
+                shotLayer?.release()
+                shotBuffer?.close()
             }
         }
     }
