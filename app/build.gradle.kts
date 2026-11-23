@@ -190,7 +190,7 @@ val checkHookImports = tasks.register("checkHookImports") {
             sourceDir.asFileTree
                 .matching { include("**/*.kt") }
                 .flatMap { file ->
-                    val bans = if ("/xposed/" in file.path) hookBans else appBans
+                    val bans = if ("/xposed/" in file.invariantSeparatorsPath) hookBans else appBans
                     file
                         .readLines()
                         .withIndex()
