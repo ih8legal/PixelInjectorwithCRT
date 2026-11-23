@@ -32,6 +32,9 @@ jobs:
             # Drop anything outside the base64 alphabet (stray spaces, newlines, a pasted prompt).
             printf '%s' "$KEYSTORE_B64" | tr -cd 'A-Za-z0-9+/=' > "$RUNNER_TEMP/debug.b64"
             echo "Secret length after cleanup: $(wc -c < "$RUNNER_TEMP/debug.b64") characters"
+            # Restore '=' padding if the end of the text was cut off when it was pasted.
+            pad=$(( (4 - $(wc -c < "$RUNNER_TEMP/debug.b64") % 4) % 4 ))
+            for _ in $(seq 1 "$pad"); do printf '=' >> "$RUNNER_TEMP/debug.b64"; done
             base64 -d "$RUNNER_TEMP/debug.b64" > "$RUNNER_TEMP/debug.p12"
             echo "Decoded keystore size: $(wc -c < "$RUNNER_TEMP/debug.p12") bytes"
             echo "DEBUG_STORE_FILE=$RUNNER_TEMP/debug.p12" >> "$GITHUB_ENV"
