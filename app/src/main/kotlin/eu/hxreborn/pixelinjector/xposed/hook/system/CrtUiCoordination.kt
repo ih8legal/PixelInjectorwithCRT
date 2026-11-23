@@ -178,7 +178,7 @@ internal class CrtUiCoordination(
                     if (pending && generation == incoming && granted && !started) {
                         started = true
                         val timeout =
-                            (CRT_DURATION_MS * ValueAnimator.getDurationScale()).toLong() +
+                            (crtAnimationDurationMs() * ValueAnimator.getDurationScale()).toLong() +
                                 FINISH_GRACE_MS
                         main.postAtTime({
                             if (pending && generation == incoming) finish(false)
@@ -223,7 +223,6 @@ internal class CrtUiCoordination(
     private companion object {
         const val DOZE_ALWAYS_ON = "doze_always_on"
         const val START_TIMEOUT_MS = 300L
-        const val CRT_DURATION_MS = 500L
         const val FINISH_GRACE_MS = 2_000L
     }
 }

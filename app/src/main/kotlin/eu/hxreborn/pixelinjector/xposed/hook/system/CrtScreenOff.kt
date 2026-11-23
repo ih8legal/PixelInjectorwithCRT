@@ -29,6 +29,7 @@ import eu.hxreborn.pixelinjector.util.signature
 import eu.hxreborn.pixelinjector.xposed.Logger
 import eu.hxreborn.pixelinjector.xposed.Switch
 import eu.hxreborn.pixelinjector.xposed.Tweak
+import eu.hxreborn.pixelinjector.xposed.Value
 import io.github.libxposed.api.XposedModule
 import java.lang.reflect.Constructor
 import java.lang.reflect.Field
@@ -37,6 +38,8 @@ import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.FutureTask
 import kotlin.math.ceil
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 private const val TWEAK = "CrtScreenOff"
 private const val COLOR_FADE = "com.android.server.display.ColorFade"
@@ -72,18 +75,34 @@ private const val POLICY_BRIGHT = 3
 private const val MODE_COOL_DOWN = 1
 private const val MODE_FADE = 2
 private const val COLOR_FADE_LAYER = 0x40000001
-private const val CRT_DURATION_MS = 500L
 private const val TYPE_NOTIFICATION_SHADE = 2040
 private const val DENSITY_DEFAULT_DPI = 160f
 private const val PIXEL_CENTER = 0.5f
 
-private const val VERTICAL_PHASE_END = 0.5f
-private const val HORIZONTAL_OVERSCAN_FRACTION = 0.03f
 private const val MAX_FRINGE_ALPHA = 0.22f
 private const val MAX_TRAIL_ALPHA = 0.30f
 private const val MIN_GLOW_HALF_HEIGHT_PX = 4f
 private const val GLOW_HALF_HEIGHT_DP = 5f
 private const val FRINGE_OFFSET_DP = 2f
+private const val MAX_CYAN_TRAIL_ALPHA = 0.60f
+private const val CYAN_RED = 0.55f
+private const val CYAN_GREEN = 0.91f
+private const val CYAN_BLUE = 1f
+private const val STUDIO_NEEDLE_LENGTH = 0.15f
+private const val CLASSIC_FADE_START = 0.80f
+private const val CLASSIC_WASH_START = 0.25f
+private const val CLASSIC_WASH_END = 0.85f
+private const val CLASSIC_WASH_PEAK = 0.80f
+private const val STUDIO_WASH_START = 0.65f
+private const val STUDIO_WASH_EXPONENT = 1.5f
+private const val STUDIO_WASH_PEAK = 0.92f
+private const val PHOSPHOR_WASH_START = 0.45f
+private const val PHOSPHOR_WASH_EXPONENT = 1.3f
+private const val PHOSPHOR_WASH_PEAK = 0.65f
+private const val AFTERGLOW_DOT_MIN_DP = 1.5f
+private const val AFTERGLOW_DOT_GROWTH_DP = 2.5f
+private const val AFTERGLOW_HALO_SCALE = 3f
+private const val AFTERGLOW_HALO_ALPHA = 0.30f
 
 private val lifecycleLock = Any()
 private var pendingHookRegistration: (() -> Unit)? = null
@@ -115,7 +134,7 @@ internal val crtScreenOff =
     Tweak(
         key = TWEAK,
         targets = setOf(Target.SYSTEM, Target.SYSTEMUI),
-        prefs = listOf(switch),
+        prefs = listOf<Value<*, *>>(switch) + CrtSettings.values,
         saveState = ::prepareForReload,
         restoreBeforeInstall = ::restoreAwakeDisplayStates,
         onReloadRejected = ::resumeAfterRejectedReload,
@@ -343,17 +362,23 @@ private class CrtLayer(
     }
 }
 
-private class CrtCollapseFrame {
+private class CrtCollapseFrame(
+    private val params: CrtParams,
+) {
     val maskTop = CrtLayer(0f, 0f, 0f)
     val maskBottom = CrtLayer(0f, 0f, 0f)
     val maskLeft = CrtLayer(0f, 0f, 0f)
     val maskRight = CrtLayer(0f, 0f, 0f)
-    val trail = CrtLayer(1f, 1f, 1f)
+    val wash = CrtLayer(1f, 1f, 1f)
+    val trail =
+        if (params.cyan) CrtLayer(CYAN_RED, CYAN_GREEN, CYAN_BLUE) else CrtLayer(1f, 1f, 1f)
     val redFringe = CrtLayer(1f, 0f, 0f)
     val blueFringe = CrtLayer(0f, 0f, 1f)
     val core = CrtLayer(1f, 1f, 1f)
     val layers =
-        listOf(maskTop, maskBottom, maskLeft, maskRight, trail, redFringe, blueFringe, core)
+        listOf(maskTop, maskBottom, maskLeft, maskRight, wash, trail, redFringe, blueFringe, core)
+
+    private var transposed = false
 
     fun update(
         level: Float,
@@ -365,29 +390,142 @@ private class CrtCollapseFrame {
         val amount = level.coerceIn(0f, 1f)
         if (amount >= 1f) return
         val progress = 1f - amount
-        val vertical = (progress / VERTICAL_PHASE_END).coerceIn(0f, 1f)
-        val beam = ((progress - VERTICAL_PHASE_END) / (1f - VERTICAL_PHASE_END)).coerceIn(0f, 1f)
-        val centerX = width / 2f
-        val centerY = height / 2f
+        // The geometry below always collapses the height first. A vertical style transposes the
+        // screen going in and each rectangle going out, so the same maths serves both directions.
+        transposed = params.vertical
+        val w = if (transposed) height else width
+        val h = if (transposed) width else height
+        val collapse = (progress / params.collapseFraction).coerceIn(0f, 1f)
+        val phaseEnd = params.phaseEnd
+        val vertical = (collapse / phaseEnd).coerceIn(0f, 1f)
+        val beam = ((collapse - phaseEnd) / (1f - phaseEnd)).coerceIn(0f, 1f)
+        val centerX = w / 2f
+        val centerY = h / 2f
         val beamHalfHeight = maxOf(1f, density)
-        val halfApertureHeight = maxOf(beamHalfHeight, centerY * (1f - vertical * vertical))
-        val halfApertureWidth =
-            (centerX + width * HORIZONTAL_OVERSCAN_FRACTION) * (1f - beam * beam)
+        val halfApertureHeight =
+            maxOf(beamHalfHeight, centerY * (1f - params.curve.ease(vertical)))
+        val beamLength = params.zipRemaining(beam)
+        val halfApertureWidth = (centerX + w * params.overscan) * beamLength
         val apertureLeft = centerX - halfApertureWidth
         val apertureTop = centerY - halfApertureHeight
         val apertureRight = centerX + halfApertureWidth
         val apertureBottom = centerY + halfApertureHeight
-        maskTop.set(0f, 0f, width, apertureTop, 1f)
-        maskBottom.set(0f, apertureBottom, width, height, 1f)
-        if (apertureLeft > 0f) maskLeft.set(0f, apertureTop, apertureLeft, apertureBottom, 1f)
-        if (apertureRight < width) {
-            maskRight.set(apertureRight, apertureTop, width, apertureBottom, 1f)
+        put(maskTop, 0f, 0f, w, apertureTop, 1f)
+        put(maskBottom, 0f, apertureBottom, w, h, 1f)
+        if (apertureLeft > 0f) put(maskLeft, 0f, apertureTop, apertureLeft, apertureBottom, 1f)
+        if (apertureRight < w) put(maskRight, apertureRight, apertureTop, w, apertureBottom, 1f)
+        val fade = terminalFade(collapse)
+        val washAlpha = (washLevel(collapse, vertical) * params.flash * fade).coerceIn(0f, 1f)
+        if (washAlpha > 0f) {
+            put(
+                wash,
+                maxOf(0f, apertureLeft),
+                apertureTop,
+                minOf(w, apertureRight),
+                apertureBottom,
+                washAlpha,
+            )
         }
-        val emission = if (beam == 0f || beam == 1f) 0f else 4f * beam * (1f - beam)
-        if (emission > 0f) {
-            setBeam(apertureLeft, apertureRight, centerY, beamHalfHeight, density, emission)
+        if (collapse > phaseEnd) {
+            val emission: Float
+            val taper: Float
+            if (params.mode == CrtMode.STUDIO) {
+                // Brightness only dies once the beam is a short needle, thinning with length.
+                val needle = (beamLength / STUDIO_NEEDLE_LENGTH).coerceIn(0f, 1f)
+                emission = needle * needle * (3f - 2f * needle)
+                taper = sqrt(beamLength) * emission
+            } else {
+                emission = if (beam == 0f || beam == 1f) 0f else 4f * beam * (1f - beam)
+                taper = 1f
+            }
+            val shown = emission * fade
+            if (shown > 0f) {
+                setBeam(apertureLeft, apertureRight, centerY, beamHalfHeight, density, shown, taper)
+            }
+        }
+        if (params.afterglowMs > 0L && progress > params.collapseFraction) {
+            val tail = 1f - params.collapseFraction
+            val spent = ((progress - params.collapseFraction) / tail).coerceIn(0f, 1f)
+            setAfterglow(centerX, centerY, density, 1f - spent)
         }
     }
+
+    private fun put(
+        layer: CrtLayer,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        alpha: Float,
+    ) {
+        if (transposed) {
+            layer.set(top, left, bottom, right, alpha)
+        } else {
+            layer.set(left, top, right, bottom, alpha)
+        }
+    }
+
+    private fun terminalFade(collapse: Float): Float =
+        if (params.mode == CrtMode.CLASSIC && collapse > CLASSIC_FADE_START) {
+            (1f - (collapse - CLASSIC_FADE_START) / (1f - CLASSIC_FADE_START)).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+
+    /** White light over the visible raster while it flattens, before the beam takes over. */
+    private fun washLevel(
+        collapse: Float,
+        vertical: Float,
+    ): Float {
+        val phaseEnd = params.phaseEnd
+        return when (params.mode) {
+            CrtMode.DEFAULT -> 0f
+            CrtMode.CLASSIC -> classicWash(collapse, phaseEnd)
+            CrtMode.STUDIO ->
+                surge(
+                    collapse <= phaseEnd,
+                    vertical,
+                    STUDIO_WASH_START,
+                    STUDIO_WASH_EXPONENT,
+                    STUDIO_WASH_PEAK,
+                )
+            CrtMode.PHOSPHOR ->
+                surge(
+                    collapse <= phaseEnd,
+                    vertical,
+                    PHOSPHOR_WASH_START,
+                    PHOSPHOR_WASH_EXPONENT,
+                    PHOSPHOR_WASH_PEAK,
+                )
+        }
+    }
+
+    /** Flat white crescendo up to the flattened raster, then held and released. */
+    private fun classicWash(
+        collapse: Float,
+        phaseEnd: Float,
+    ): Float {
+        val rising = (collapse - CLASSIC_WASH_START) / (phaseEnd - CLASSIC_WASH_START)
+        val falling = 1f - (collapse - phaseEnd) / (CLASSIC_WASH_END - phaseEnd)
+        return when {
+            collapse < CLASSIC_WASH_START || collapse > CLASSIC_WASH_END -> 0f
+            collapse <= phaseEnd -> rising * CLASSIC_WASH_PEAK
+            else -> falling * CLASSIC_WASH_PEAK
+        }
+    }
+
+    private fun surge(
+        collapsing: Boolean,
+        vertical: Float,
+        start: Float,
+        exponent: Float,
+        peak: Float,
+    ): Float =
+        if (collapsing && vertical >= start) {
+            ((vertical - start) / (1f - start)).pow(exponent) * peak
+        } else {
+            0f
+        }
 
     private fun setBeam(
         left: Float,
@@ -396,27 +534,49 @@ private class CrtCollapseFrame {
         beamHalfHeight: Float,
         density: Float,
         emission: Float,
+        taper: Float,
     ) {
-        val glowHalfHeight = maxOf(MIN_GLOW_HALF_HEIGHT_PX, GLOW_HALF_HEIGHT_DP * density)
+        val glowHalfHeight = maxOf(MIN_GLOW_HALF_HEIGHT_PX, GLOW_HALF_HEIGHT_DP * density) * taper
         val fringeOffset = maxOf(1f, FRINGE_OFFSET_DP * density)
         val coreTop = centerY - beamHalfHeight
         val coreBottom = centerY + beamHalfHeight
-        trail.set(
+        val flash = params.flash
+        val trailAlpha = if (params.cyan) MAX_CYAN_TRAIL_ALPHA else MAX_TRAIL_ALPHA
+        put(
+            trail,
             left,
             centerY - glowHalfHeight,
             right,
             centerY + glowHalfHeight,
-            emission * MAX_TRAIL_ALPHA,
+            (emission * trailAlpha * flash).coerceIn(0f, 1f),
         )
-        redFringe.set(left, coreTop - fringeOffset, right, coreTop, emission * MAX_FRINGE_ALPHA)
-        blueFringe.set(
-            left,
-            coreBottom,
-            right,
-            coreBottom + fringeOffset,
-            emission * MAX_FRINGE_ALPHA,
+        if (params.fringe) {
+            val fringeAlpha = (emission * MAX_FRINGE_ALPHA * flash).coerceIn(0f, 1f)
+            put(redFringe, left, coreTop - fringeOffset, right, coreTop, fringeAlpha)
+            put(blueFringe, left, coreBottom, right, coreBottom + fringeOffset, fringeAlpha)
+        }
+        put(core, left, coreTop, right, coreBottom, (emission * flash).coerceIn(0f, 1f))
+    }
+
+    /** The phosphor dot that lingers on a black screen once the beam has collapsed. */
+    private fun setAfterglow(
+        centerX: Float,
+        centerY: Float,
+        density: Float,
+        remaining: Float,
+    ) {
+        val alpha = (remaining * remaining * params.flash).coerceIn(0f, 1f)
+        val dot = (AFTERGLOW_DOT_MIN_DP + AFTERGLOW_DOT_GROWTH_DP * remaining) * density
+        val halo = dot * AFTERGLOW_HALO_SCALE
+        put(
+            trail,
+            centerX - halo,
+            centerY - halo,
+            centerX + halo,
+            centerY + halo,
+            alpha * AFTERGLOW_HALO_ALPHA,
         )
-        core.set(left, coreTop, right, coreBottom, emission)
+        put(core, centerX - dot, centerY - dot, centerX + dot, centerY + dot, alpha)
     }
 }
 
@@ -427,10 +587,11 @@ private class CrtSurface(
     private val height: Float,
     private val density: Float,
     val animator: ObjectAnimator,
+    params: CrtParams,
 ) {
     private val stockDuration = animator.duration
     private val stockInterpolator = animator.interpolator
-    private val frame = CrtCollapseFrame()
+    private val frame = CrtCollapseFrame(params)
     private val crop = Rect()
 
     var drawFailed = false
@@ -827,6 +988,7 @@ private class CrtColorFade(
         mode: Int,
         offAnimator: ObjectAnimator,
     ): Boolean {
+        val params = CrtSettings.snapshot()
         val displayManagerInternal = fade.displayManagerInternal.get(colorFade)!!
         val displayId = fade.displayId.getInt(colorFade)
         val displayInfo =
@@ -847,7 +1009,7 @@ private class CrtColorFade(
                     .build()
                     .also(created::add)
             SurfaceControl.Transaction().use { transaction ->
-                CrtCollapseFrame().layers.forEachIndexed { index, layer ->
+                CrtCollapseFrame(params).layers.forEachIndexed { index, layer ->
                     val surface =
                         SurfaceControl
                             .Builder()
@@ -885,8 +1047,9 @@ private class CrtColorFade(
                     height.toFloat(),
                     density,
                     offAnimator,
+                    params,
                 )
-            offAnimator.duration = CRT_DURATION_MS
+            offAnimator.duration = params.totalMs
             offAnimator.interpolator = LinearInterpolator()
             surfacePrepared = true
             return true

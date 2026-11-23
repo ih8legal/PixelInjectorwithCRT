@@ -65,6 +65,7 @@ import eu.hxreborn.pixelinjector.ui.betterfox.shareIntent
 import eu.hxreborn.pixelinjector.ui.dashboard.DashboardActions
 import eu.hxreborn.pixelinjector.ui.dashboard.DashboardScreen
 import eu.hxreborn.pixelinjector.ui.editor.AppsSheet
+import eu.hxreborn.pixelinjector.ui.editor.CrtScreenOffSheet
 import eu.hxreborn.pixelinjector.ui.editor.DownloadChipSheet
 import eu.hxreborn.pixelinjector.ui.editor.EmptyShadeSheet
 import eu.hxreborn.pixelinjector.ui.editor.FingerprintIconSheet
@@ -320,6 +321,26 @@ fun AppNavHost(
                         onTextColorChange = { viewModel.save(Prefs.NOW_PLAYING_CHIP_TEXT_COLOR, it) },
                         onChipColorChange = { viewModel.save(Prefs.NOW_PLAYING_CHIP_COLOR, it) },
                         onOpacityChange = { viewModel.save(Prefs.NOW_PLAYING_CHIP_OPACITY, it) },
+                    )
+                }
+                entry<Destination.CrtScreenOffEditor>(metadata = BottomSheetSceneStrategy.bottomSheet()) {
+                    CrtScreenOffSheet(
+                        mode = prefs[Prefs.CRT_MODE],
+                        style = prefs[Prefs.CRT_STYLE],
+                        curve = prefs[Prefs.CRT_CURVE],
+                        duration = prefs[Prefs.CRT_DURATION],
+                        flash = prefs[Prefs.CRT_FLASH],
+                        afterglow = prefs[Prefs.CRT_AFTERGLOW],
+                        fringe = prefs[Prefs.CRT_FRINGE],
+                        cyan = prefs[Prefs.CRT_CYAN],
+                        onModeChange = { viewModel.save(Prefs.CRT_MODE, it) },
+                        onStyleChange = { viewModel.save(Prefs.CRT_STYLE, it) },
+                        onCurveChange = { viewModel.save(Prefs.CRT_CURVE, it) },
+                        onDurationChange = { viewModel.save(Prefs.CRT_DURATION, it) },
+                        onFlashChange = { viewModel.save(Prefs.CRT_FLASH, it) },
+                        onAfterglowChange = { viewModel.save(Prefs.CRT_AFTERGLOW, it) },
+                        onFringeChange = { viewModel.save(Prefs.CRT_FRINGE, it) },
+                        onCyanChange = { viewModel.save(Prefs.CRT_CYAN, it) },
                     )
                 }
                 entry<Destination.DownloadChipEditor>(metadata = BottomSheetSceneStrategy.bottomSheet()) {

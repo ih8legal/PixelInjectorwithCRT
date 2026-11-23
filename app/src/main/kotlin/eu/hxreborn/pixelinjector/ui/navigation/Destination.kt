@@ -32,6 +32,9 @@ sealed interface Destination : NavKey {
     data object NowPlayingChipEditor : Destination
 
     @Serializable
+    data object CrtScreenOffEditor : Destination
+
+    @Serializable
     data object DownloadChipEditor : Destination
 
     @Serializable

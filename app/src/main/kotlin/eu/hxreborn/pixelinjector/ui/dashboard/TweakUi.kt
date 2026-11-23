@@ -259,6 +259,10 @@ val tweakUis: List<TweakUi> =
             R.string.tweak_crt_screen_off,
             R.string.tweak_crt_screen_off_desc,
             TweakGroup.SYSTEM,
+            editor =
+                TweakEditor(R.string.tweak_crt_screen_off_edit, null, Destination.CrtScreenOffEditor) {
+                    "${it[Prefs.CRT_DURATION]} ms"
+                },
         ),
         TweakUi(
             "DoubleTapToSleep",
