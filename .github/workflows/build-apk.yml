@@ -29,7 +29,11 @@ jobs:
           KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.p12"
+            # Drop anything outside the base64 alphabet (stray spaces, newlines, a pasted prompt).
+            printf '%s' "$KEYSTORE_B64" | tr -cd 'A-Za-z0-9+/=' > "$RUNNER_TEMP/debug.b64"
+            echo "Secret length after cleanup: $(wc -c < "$RUNNER_TEMP/debug.b64") characters"
+            base64 -d "$RUNNER_TEMP/debug.b64" > "$RUNNER_TEMP/debug.p12"
+            echo "Decoded keystore size: $(wc -c < "$RUNNER_TEMP/debug.p12") bytes"
             echo "DEBUG_STORE_FILE=$RUNNER_TEMP/debug.p12" >> "$GITHUB_ENV"
           else
             echo "No DEBUG_KEYSTORE_B64 secret; using a throwaway debug key."
