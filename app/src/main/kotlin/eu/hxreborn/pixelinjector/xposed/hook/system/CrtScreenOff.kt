@@ -79,7 +79,6 @@ private const val COLOR_FADE_LAYER = 0x40000001
 private const val TYPE_NOTIFICATION_SHADE = 2040
 private const val DENSITY_DEFAULT_DPI = 160f
 private const val PIXEL_CENTER = 0.5f
-private const val SCREEN_CAPTURE = "android.window.ScreenCapture\$ScreenshotHardwareBuffer"
 private const val MASK_LAYER_COUNT = 4
 private const val SHOT_LAYER = MASK_LAYER_COUNT
 
@@ -851,13 +850,13 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
     val captureBindings =
         resolving {
             val int = Int::class.javaPrimitiveType
+            val screenshot =
+                cl
+                    .loadClass(DISPLAY_MANAGER_INTERNAL)
+                    .requiredMethod("systemScreenshot", int)
             CaptureBindings(
-                screenshot =
-                    cl
-                        .loadClass(DISPLAY_MANAGER_INTERNAL)
-                        .requiredMethod("systemScreenshot", int),
-                hardwareBuffer =
-                    cl.loadClass(SCREEN_CAPTURE).requiredMethod("getHardwareBuffer"),
+                screenshot = screenshot,
+                hardwareBuffer = screenshot.returnType.requiredMethod("getHardwareBuffer"),
                 setBlastLayer = SurfaceControl.Builder::class.java.requiredMethod("setBLASTLayer"),
                 setBuffer =
                     SurfaceControl.Transaction::class.java.requiredMethod(
@@ -875,7 +874,9 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
                         Float::class.javaPrimitiveType,
                     ),
             )
-        }.onFailure { crtTrace("capture bindings missing reason=${it.reason()}") }
+        }.onFailure {
+            crtTrace("capture bindings missing reason=${it.reason()} detail=${it.message}")
+        }
             .onSuccess { crtTrace("capture bindings resolved sdk=${Build.VERSION.SDK_INT}") }
             .getOrNull()
     val animatorBindings =
