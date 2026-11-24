@@ -888,7 +888,7 @@ private class CrtSurface(
         transaction: SurfaceControl.Transaction,
     ) {
         val shader = shaderLayer ?: return
-        if (shader.draw(level)) {
+        if (shader.draw((1f - level).coerceIn(0f, 1f))) {
             if (shader.frames >= SHADER_WARMUP_FRAMES) transaction.setAlpha(shader.layer, 1f)
         } else {
             transaction.setAlpha(shader.layer, 0f)
