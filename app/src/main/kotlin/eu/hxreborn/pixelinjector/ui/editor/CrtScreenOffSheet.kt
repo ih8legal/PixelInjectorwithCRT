@@ -97,6 +97,7 @@ fun CrtScreenOffSheet(
             title = stringResource(R.string.crt_duration),
             value = duration,
             range = Prefs.CRT_DURATION_MIN..Prefs.CRT_DURATION_MAX,
+            step = DURATION_STEP_MS,
             valueText = { stringResource(R.string.crt_duration_value, it) },
             onChange = onDurationChange,
         )
@@ -104,6 +105,7 @@ fun CrtScreenOffSheet(
             title = stringResource(R.string.crt_flash),
             value = flash,
             range = Prefs.CRT_FLASH_MIN..Prefs.CRT_FLASH_MAX,
+            step = FLASH_STEP_PERCENT,
             valueText = { stringResource(R.string.crt_flash_value, it) },
             onChange = onFlashChange,
         )
@@ -112,6 +114,7 @@ fun CrtScreenOffSheet(
                 title = stringResource(R.string.crt_afterglow),
                 value = afterglow,
                 range = Prefs.CRT_AFTERGLOW_MIN..Prefs.CRT_AFTERGLOW_MAX,
+                step = AFTERGLOW_STEP_MS,
                 valueText = { stringResource(R.string.crt_afterglow_value, it) },
                 onChange = onAfterglowChange,
             )
@@ -124,15 +127,22 @@ fun CrtScreenOffSheet(
     }
 }
 
+private const val DURATION_STEP_MS = 50
+private const val FLASH_STEP_PERCENT = 10
+private const val AFTERGLOW_STEP_MS = 50
+
 @Composable
 private fun CrtSliderTile(
     title: String,
     value: Int,
     range: IntRange,
+    step: Int,
     valueText: @Composable (Int) -> String,
     onChange: (Int) -> Unit,
 ) {
-    var shown by remember(value) { mutableFloatStateOf(value.coerceIn(range.first, range.last).toFloat()) }
+    var shown by remember(value) {
+        mutableFloatStateOf(value.coerceIn(range.first, range.last).toFloat())
+    }
     Tile(shape = TileShape) {
         Column(Modifier.weight(1f)) {
             Text(title, style = AppText.tileTitle)
@@ -142,6 +152,7 @@ private fun CrtSliderTile(
                 onValueChange = { shown = it },
                 onValueChangeFinished = { onChange(shown.roundToInt()) },
                 valueRange = range.first.toFloat()..range.last.toFloat(),
+                steps = ((range.last - range.first) / step - 1).coerceAtLeast(0),
             )
         }
     }
