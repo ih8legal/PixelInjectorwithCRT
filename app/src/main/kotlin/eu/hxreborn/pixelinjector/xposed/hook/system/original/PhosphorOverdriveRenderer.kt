@@ -41,7 +41,8 @@ class PhosphorOverdriveRenderer(
     private val afterglowMs: Long = 500L,
     private val coilResistance: CoilResistance = CoilResistance.EXTREME,
     private val enableMagneticStretch: Boolean = true,
-    private val enableAnamorphicFlare: Boolean = true
+    private val enableAnamorphicFlare: Boolean = true,
+    private val colorSplitBoost: Float = 1f
 ) : CrtRenderer {
 
     // Pre-allocated paints for 60/120fps zero-allocation rendering
@@ -424,9 +425,13 @@ class PhosphorOverdriveRenderer(
                     shader.setInputShader("image", bmpShader)
                     crtShader = shader
                     bitmapShader = bmpShader
-                } catch (_: Exception) {
+                    eu.hxreborn.pixelinjector.xposed.hook.system
+                        .crtTrace("phosphor AGSL shader compiled")
+                } catch (error: Exception) {
                     crtShader = null
                     bitmapShader = null
+                    eu.hxreborn.pixelinjector.xposed.hook.system
+                        .crtTrace("phosphor AGSL failed, canvas split only: ${error.message}")
                 }
             }
             try {
@@ -686,7 +691,8 @@ class PhosphorOverdriveRenderer(
                 val shader = crtShader
                 if (shader != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     val surgeFactor = 1.0f + (1.25f * surgeBell)
-                    val verticalColorShiftAmount = 0.055f * aberrAmount * flashIntensity * surgeFactor
+                    val verticalColorShiftAmount =
+                        0.055f * aberrAmount * flashIntensity * surgeFactor * colorSplitBoost
                     val verticalSquishBlurPx = (28f * density) * aberrAmount * flashIntensity * surgeFactor
 
                     val phosphorOverdriveAmount = if (c in (squashEnd * 0.35f)..slitHoldEnd) {
@@ -717,7 +723,9 @@ class PhosphorOverdriveRenderer(
                     canvas.drawRect(dstBounds, shaderPaint)
                 } else if (aberrAmount > 0.05f) {
                     // Fallback Linear Red/Cyan Vertical Shift with breakout beyond bounds
-                    val verticalShiftPx = (currentBreakoutPx * 0.85f).coerceAtLeast(10f * density * aberrAmount)
+                    val verticalShiftPx =
+                        (currentBreakoutPx * 0.85f * colorSplitBoost)
+                            .coerceAtLeast(10f * density * aberrAmount * colorSplitBoost)
 
                     redPaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
                     cyanPaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)

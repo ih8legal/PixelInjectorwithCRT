@@ -19,6 +19,7 @@ import java.lang.reflect.Constructor
 import java.lang.reflect.Method
 
 private const val SHADER_LAYER_Z = 32
+private const val FRINGE_SPLIT_BOOST = 2.5f
 
 /** Hidden `BLASTBufferQueue` calls, the same ones the stock fade uses to get a drawable Surface. */
 internal class CrtShaderBindings(
@@ -177,6 +178,7 @@ internal class CrtShaderLayer private constructor(
                         coilResistance = coilFor(params.curve),
                         enableMagneticStretch = true,
                         enableAnamorphicFlare = true,
+                        colorSplitBoost = if (params.fringe) FRINGE_SPLIT_BOOST else 1f,
                     )
                 CrtMode.DEFAULT -> null
             }
