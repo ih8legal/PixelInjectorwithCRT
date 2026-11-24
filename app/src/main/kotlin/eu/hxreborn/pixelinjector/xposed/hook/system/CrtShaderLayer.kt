@@ -27,6 +27,7 @@ internal class CrtShaderBindings(
     private val createSurface: Method,
     private val destroyQueue: Method,
     val setBlastLayer: Method,
+    private val update: Method?,
 ) {
     fun newQueue(
         layer: SurfaceControl,
@@ -35,6 +36,12 @@ internal class CrtShaderBindings(
     ): Any {
         val ints = intArrayOf(width, height, PixelFormat.TRANSLUCENT)
         var nextInt = 0
+        if (update != null) {
+            // Android 17: the queue is created bare and bound to the layer afterwards.
+            val bare = queueConstructor.newInstance("CrtShader", true)
+            update.invoke(bare, layer, width, height, PixelFormat.TRANSLUCENT)
+            return bare
+        }
         val args =
             queueConstructor.parameterTypes.map { type ->
                 when (type) {
