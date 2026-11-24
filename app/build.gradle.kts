@@ -29,17 +29,6 @@ android {
     }
 
     signingConfigs {
-        // Optional fixed debug key so CI builds stay installable over each other.
-        val debugStore = providers.environmentVariable("DEBUG_STORE_FILE").orNull
-        if (!debugStore.isNullOrBlank()) {
-            getByName("debug") {
-                storeFile = file(debugStore)
-                storePassword = providers.environmentVariable("DEBUG_STORE_PASSWORD").orNull
-                keyAlias = providers.environmentVariable("DEBUG_KEY_ALIAS").orNull
-                keyPassword = providers.environmentVariable("DEBUG_KEY_PASSWORD").orNull
-                storeType = "PKCS12"
-            }
-        }
         create("release") {
             fun secret(name: String): String? =
                 providers
