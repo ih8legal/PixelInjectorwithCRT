@@ -32,8 +32,20 @@ internal class CrtShaderBindings(
         layer: SurfaceControl,
         width: Int,
         height: Int,
-    ): Any =
-        queueConstructor.newInstance("CrtShader", layer, width, height, PixelFormat.TRANSLUCENT)
+    ): Any {
+        val ints = intArrayOf(width, height, PixelFormat.TRANSLUCENT)
+        var nextInt = 0
+        val args =
+            queueConstructor.parameterTypes.map { type ->
+                when (type) {
+                    String::class.java -> "CrtShader"
+                    SurfaceControl::class.java -> layer
+                    Int::class.javaPrimitiveType -> ints[nextInt++]
+                    else -> error("unsupported constructor parameter $type")
+                }
+            }
+        return queueConstructor.newInstance(*args.toTypedArray())
+    }
 
     fun surfaceOf(queue: Any): Surface = createSurface.invoke(queue) as Surface
 

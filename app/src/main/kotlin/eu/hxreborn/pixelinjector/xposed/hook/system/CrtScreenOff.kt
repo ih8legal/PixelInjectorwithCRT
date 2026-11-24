@@ -1111,15 +1111,7 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
                 val queueClass = cl.loadClass("android.graphics.BLASTBufferQueue")
                 val int = Int::class.javaPrimitiveType
                 CrtShaderBindings(
-                    queueConstructor =
-                        queueClass
-                            .getDeclaredConstructor(
-                                String::class.java,
-                                SurfaceControl::class.java,
-                                int,
-                                int,
-                                int,
-                            ).also { it.isAccessible = true },
+                    queueConstructor = pickQueueConstructor(queueClass),
                     createSurface = queueClass.requiredMethod("createSurface"),
                     destroyQueue = queueClass.requiredMethod("destroy"),
                     setBlastLayer =
@@ -1843,4 +1835,20 @@ private fun missing(
         "target not found tweak=$TWEAK member=$member build=${Build.ID} reason=${cause.reason()}",
     )
     return false
+}
+
+/** Android 17 changed the hidden constructor, so take whichever one carries layer, size and format. */
+private fun pickQueueConstructor(queueClass: Class<*>): Constructor<*> {
+    val all = queueClass.declaredConstructors
+    crtTrace("BLASTBufferQueue constructors: ${all.joinToString { it.toGenericString() }}")
+    val int = Int::class.javaPrimitiveType
+    val match =
+        all.firstOrNull { constructor ->
+            val types = constructor.parameterTypes
+            types.count { it == String::class.java } == 1 &&
+                types.count { it == SurfaceControl::class.java } == 1 &&
+                types.count { it == int } == 3 &&
+                types.size == 5
+        } ?: throw NoSuchMethodException("${queueClass.name}.<init> with layer and size")
+    return match.also { it.isAccessible = true }
 }
