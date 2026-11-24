@@ -334,6 +334,7 @@ fun AppNavHost(
                         fringe = prefs[Prefs.CRT_FRINGE],
                         cyan = prefs[Prefs.CRT_CYAN],
                         capture = prefs[Prefs.CRT_CAPTURE],
+                        shader = prefs[Prefs.CRT_SHADER],
                         onModeChange = { viewModel.save(Prefs.CRT_MODE, it) },
                         onStyleChange = { viewModel.save(Prefs.CRT_STYLE, it) },
                         onCurveChange = { viewModel.save(Prefs.CRT_CURVE, it) },
@@ -343,6 +344,7 @@ fun AppNavHost(
                         onFringeChange = { viewModel.save(Prefs.CRT_FRINGE, it) },
                         onCyanChange = { viewModel.save(Prefs.CRT_CYAN, it) },
                         onCaptureChange = { viewModel.save(Prefs.CRT_CAPTURE, it) },
+                        onShaderChange = { viewModel.save(Prefs.CRT_SHADER, it) },
                         onViewLog = { push(Destination.CrtLog) },
                     )
                 }

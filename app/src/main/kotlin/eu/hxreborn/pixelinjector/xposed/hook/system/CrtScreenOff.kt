@@ -81,6 +81,7 @@ private const val COLOR_FADE_LAYER = 0x40000001
 private const val TYPE_NOTIFICATION_SHADE = 2040
 private const val DENSITY_DEFAULT_DPI = 160f
 private const val PIXEL_CENTER = 0.5f
+private const val SHADER_WARMUP_FRAMES = 2
 private const val MASK_LAYER_COUNT = 4
 private const val SHOT_LAYER_COUNT = 4
 private const val MIN_GHOST_ALPHA = 0.01f
@@ -128,7 +129,7 @@ private const val AFTERGLOW_HALO_SCALE = 3f
 private const val AFTERGLOW_HALO_ALPHA = 0.30f
 
 /** Diagnostic line for the in-app CRT debug log; the log screen filters on `tweak=CrtScreenOff`. */
-private fun crtTrace(message: String) {
+internal fun crtTrace(message: String) {
     val line = "crt trace tweak=$TWEAK $message"
     Logger.info(line)
     CrtTraceFile.append(line)
@@ -849,6 +850,7 @@ private class CrtSurface(
     private val shotLayers: List<SurfaceControl>?,
     private val shotBuffer: HardwareBuffer?,
     private val setMatrix: Method?,
+    private var shaderLayer: CrtShaderLayer?,
 ) {
     private val stockDuration = animator.duration
     private val stockInterpolator = animator.interpolator
@@ -876,7 +878,24 @@ private class CrtSurface(
             if (hasPixels) transaction.setCrop(surface, crop)
         }
         shotLayers?.let { drawShots(it, transaction) }
+        drawShader(level, transaction)
         showContainer(transaction)
+    }
+
+    /** Shown only after a couple of delivered frames; any failure reverts to the layers. */
+    private fun drawShader(
+        level: Float,
+        transaction: SurfaceControl.Transaction,
+    ) {
+        val shader = shaderLayer ?: return
+        if (shader.draw(level)) {
+            if (shader.frames >= SHADER_WARMUP_FRAMES) transaction.setAlpha(shader.layer, 1f)
+        } else {
+            transaction.setAlpha(shader.layer, 0f)
+            crtTrace("shader disabled after failure, using layers")
+            shader.release()
+            shaderLayer = null
+        }
     }
 
     private fun drawShots(
@@ -944,6 +963,8 @@ private class CrtSurface(
 
     fun release() {
         layers.forEach(SurfaceControl::release)
+        shaderLayer?.release()
+        shaderLayer = null
         shotLayers?.forEach(SurfaceControl::release)
         shotBuffer?.close()
     }
@@ -1084,6 +1105,32 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
         }
             .onSuccess { crtTrace("capture bindings resolved sdk=${Build.VERSION.SDK_INT}") }
             .getOrNull()
+    val shaderBindings =
+        if (CrtSettings.shader.enabled) {
+            resolving {
+                val queueClass = cl.loadClass("android.graphics.BLASTBufferQueue")
+                val int = Int::class.javaPrimitiveType
+                CrtShaderBindings(
+                    queueConstructor =
+                        queueClass
+                            .getDeclaredConstructor(
+                                String::class.java,
+                                SurfaceControl::class.java,
+                                int,
+                                int,
+                                int,
+                            ).also { it.isAccessible = true },
+                    createSurface = queueClass.requiredMethod("createSurface"),
+                    destroyQueue = queueClass.requiredMethod("destroy"),
+                    setBlastLayer =
+                        SurfaceControl.Builder::class.java.requiredMethod("setBLASTLayer"),
+                )
+            }.onFailure {
+                crtTrace("shader bindings missing reason=${it.reason()} detail=${it.message}")
+            }.getOrNull()
+        } else {
+            null
+        }
     val animatorBindings =
         resolving {
             OffAnimatorBindings(
@@ -1152,6 +1199,7 @@ private fun XposedModule.installCrtScreenOff(cl: ClassLoader): Boolean {
             surfaceBindings,
             animatorBindings,
             captureBindings,
+            shaderBindings,
         )
     Logger.info(
         "resolved tweak=$TWEAK members=${draw.signature()},${prepare.signature()}," +
@@ -1271,6 +1319,7 @@ private class CrtColorFade(
     private val surfaces: SurfaceBindings,
     private val animator: OffAnimatorBindings,
     private val capture: CaptureBindings?,
+    private val shaderBindings: CrtShaderBindings?,
 ) {
     fun ownedSurface(colorFade: Any): CrtSurface? =
         crtSurfaces[colorFade]?.takeIf {
@@ -1363,6 +1412,7 @@ private class CrtColorFade(
             crtTrace("capture unavailable reason=bindings missing")
         }
         var shotLayers: List<SurfaceControl>? = null
+        var shaderLayer: CrtShaderLayer? = null
         val created = ArrayList<SurfaceControl>()
         var surfaceLayout: Any? = null
         var surfacePrepared = false
@@ -1393,6 +1443,23 @@ private class CrtColorFade(
                 if (shotBuffer != null && capture != null) {
                     shotLayers = capture.newLayers(container, transaction, shotBuffer)
                 }
+                if (params.shader && shotBuffer != null && shotLayers != null) {
+                    if (shaderBindings == null) {
+                        crtTrace("shader unavailable reason=bindings missing")
+                    } else {
+                        shaderLayer =
+                            CrtShaderLayer.create(
+                                shaderBindings,
+                                container,
+                                shotBuffer,
+                                width,
+                                height,
+                                params,
+                                density,
+                                transaction,
+                            )
+                    }
+                }
                 surfaces.setLayerStack.invoke(transaction, container, layerStack)
                 surfaces.setWindowCrop.invoke(transaction, container, width, height)
                 val layout =
@@ -1420,12 +1487,14 @@ private class CrtColorFade(
                     shotLayers,
                     shotBuffer.takeIf { shotLayers != null },
                     capture?.setMatrix,
+                    shaderLayer,
                 )
             offAnimator.duration = params.totalMs
             offAnimator.interpolator = LinearInterpolator()
             if (shotLayers == null) shotBuffer?.close()
             crtTrace(
                 "collapse path=${if (shotLayers != null) "screenshot" else "masks"} " +
+                    "shader=${shaderLayer != null} " +
                     "mode=${params.mode} capture=${params.capture} display=${width}x$height " +
                     "sdk=${Build.VERSION.SDK_INT} build=${Build.ID}",
             )
@@ -1443,6 +1512,7 @@ private class CrtColorFade(
                     }
                 }
                 created.forEach(SurfaceControl::release)
+                shaderLayer?.release()
                 shotLayers?.forEach(SurfaceControl::release)
                 shotBuffer?.close()
             }

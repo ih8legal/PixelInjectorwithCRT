@@ -41,6 +41,7 @@ fun CrtScreenOffSheet(
     fringe: Boolean,
     cyan: Boolean,
     capture: Boolean,
+    shader: Boolean,
     onModeChange: (String) -> Unit,
     onStyleChange: (String) -> Unit,
     onCurveChange: (String) -> Unit,
@@ -50,6 +51,7 @@ fun CrtScreenOffSheet(
     onFringeChange: (Boolean) -> Unit,
     onCyanChange: (Boolean) -> Unit,
     onCaptureChange: (Boolean) -> Unit,
+    onShaderChange: (Boolean) -> Unit,
     onViewLog: () -> Unit,
 ) {
     Column(
@@ -117,6 +119,7 @@ fun CrtScreenOffSheet(
         ChipSwitchTile(stringResource(R.string.crt_fringe), fringe, onFringeChange)
         ChipSwitchTile(stringResource(R.string.crt_cyan), cyan, onCyanChange)
         ChipSwitchTile(stringResource(R.string.crt_capture), capture, onCaptureChange)
+        ChipSwitchTile(stringResource(R.string.crt_shader), shader, onShaderChange)
         TextButton(onClick = onViewLog) { Text(stringResource(R.string.crt_view_log)) }
     }
 }

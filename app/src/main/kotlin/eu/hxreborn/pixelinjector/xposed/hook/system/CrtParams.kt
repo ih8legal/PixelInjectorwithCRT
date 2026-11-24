@@ -14,6 +14,8 @@ private const val DEFAULT_OVERSCAN = 0.03f
 private const val CLASSIC_OVERSCAN = 0.25f
 private const val STUDIO_ZIP_EXPONENT = 2.2f
 private const val PERCENT = 100f
+private const val STUDIO_STANDARD_SCALE = 0.70f
+private const val PHOSPHOR_STRETCH_SCALE = 1.20f
 
 /**
  * Look presets, ported from the standalone CRT Screen-Off app. The app draws a screenshot bitmap
@@ -73,6 +75,7 @@ internal class CrtParams(
     val fringe: Boolean,
     cyan: Boolean,
     val capture: Boolean,
+    val shader: Boolean,
 ) {
     /** Only Phosphor Overdrive lingers after the collapse, as in the app. */
     val afterglowMs: Long = if (mode == CrtMode.PHOSPHOR) afterglowMs else 0L
@@ -126,22 +129,42 @@ internal object CrtSettings {
     val fringe = Switch(Prefs.CRT_FRINGE)
     val cyan = Switch(Prefs.CRT_CYAN)
     val capture = Switch(Prefs.CRT_CAPTURE)
+    val shader = Switch(Prefs.CRT_SHADER)
 
     val values: List<Value<*, *>> =
-        listOf(mode, style, curve, duration, flash, afterglow, fringe, cyan, capture)
+        listOf(mode, style, curve, duration, flash, afterglow, fringe, cyan, capture, shader)
 
-    fun snapshot(): CrtParams =
-        CrtParams(
-            mode = mode.value,
+    fun snapshot(): CrtParams {
+        val chosenMode = mode.value
+        val chosenCurve = curve.value
+        val useShader = shader.enabled && capture.enabled && chosenMode != CrtMode.DEFAULT
+        val base = duration.value.toLong()
+        val collapse =
+            if (useShader) (base * shaderTimeScale(chosenMode, chosenCurve)).toLong() else base
+        return CrtParams(
+            mode = chosenMode,
             vertical = style.value,
-            curve = curve.value,
-            collapseMs = duration.value.toLong(),
+            curve = chosenCurve,
+            collapseMs = collapse,
             afterglowMs = afterglow.value.toLong(),
             flash = flash.value,
             fringe = fringe.enabled,
             cyan = cyan.enabled,
             capture = capture.enabled,
+            shader = useShader,
         )
+    }
+
+    /** The standalone app stretches each look's timeline differently from the slider value. */
+    private fun shaderTimeScale(
+        mode: CrtMode,
+        curve: CrtCurve,
+    ): Float =
+        when (mode) {
+            CrtMode.STUDIO -> if (curve == CrtCurve.STANDARD) STUDIO_STANDARD_SCALE else 1f
+            CrtMode.PHOSPHOR -> coilFor(curve).timeMultiplier * PHOSPHOR_STRETCH_SCALE
+            else -> 1f
+        }
 }
 
 /** Total animation length including any afterglow, for the SystemUI side's watchdog. */
